@@ -1,7 +1,18 @@
 #include <SDL2/SDL.h>
 #include <stdio.h>
+#include <time.h>
+
+#ifdef _WIN32
+#include <direct.h>
+static int make_dir(const char *path) { return _mkdir(path); }
+#else
+#include <sys/stat.h>
+#include <sys/types.h>
+static int make_dir(const char *path) { return mkdir(path, 0755); }
+#endif
 
 #include "brush.h"
+#include "export.h"
 #include "framebuffer.h"
 
 static int sdl_fail(const char *msg) {
@@ -22,6 +33,30 @@ static void clamp_int(int *v, int lo, int hi) {
     *v = lo;
   if (*v > hi)
     *v = hi;
+}
+
+static void save_canvas_bmp(const Framebuffer *fb) {
+  (void)make_dir("exports");
+
+  time_t t = time(NULL);
+  struct tm tmv;
+#ifdef _WIN32
+  localtime_s(&tmv, &t);
+#else
+  tmv = *localtime(&t);
+#endif
+
+  char stamp[32];
+  strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", &tmv);
+
+  char path[128];
+  snprintf(path, sizeof(path), "exports/pixel_%s.bmp", stamp);
+
+  if (export_bmp(fb, path)) {
+    printf("Saved: %s\n", path);
+  } else {
+    printf("Save failed: %s (%s)\n", path, SDL_GetError());
+  }
 }
 
 int main(int argc, char **argv) {
@@ -100,6 +135,9 @@ int main(int argc, char **argv) {
         }
         if (e.key.keysym.sym == SDLK_c) {
           fb_clear(&fb, ARGB(255, 18, 18, 18));
+        }
+        if (e.key.keysym.sym == SDLK_s) {
+          save_canvas_bmp(&fb);
         }
         break;
 
