@@ -1,5 +1,7 @@
 #include <SDL2/SDL.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 #ifdef _WIN32
@@ -21,12 +23,24 @@ static int sdl_fail(const char *msg) {
   return 1;
 }
 
+typedef enum { TOOL_BRUSH = 0, TOOL_LINE, TOOL_RECT, TOOL_CIRCLE } Tool;
+
 typedef struct {
   int drawing;
+  int start_x;
+  int start_y;
   int last_x;
   int last_y;
+
+  Tool tool;
+  int fill;
+
   int brush_radius;
   uint32_t brush_color;
+
+  uint32_t *base_pixels;
+  int base_w;
+  int base_h;
 } App;
 
 static void clamp_int(int *v, int lo, int hi) {
@@ -34,6 +48,76 @@ static void clamp_int(int *v, int lo, int hi) {
     *v = lo;
   if (*v > hi)
     *v = hi;
+}
+
+static int iabs(int v) { return v < 0 ? -v : v; }
+
+static int isqrt_int(int v) {
+  if (v <= 0)
+    return 0;
+  int x = v;
+  int y = (x + 1) / 2;
+  while (y < x) {
+    x = y;
+    y = (x + v / x) / 2;
+  }
+  return x;
+}
+
+static void app_base_init(App *app, int w, int h) {
+  app->base_w = w;
+  app->base_h = h;
+  app->base_pixels = (uint32_t *)malloc(sizeof(uint32_t) * w * h);
+  if (app->base_pixels) {
+    memset(app->base_pixels, 0, sizeof(uint32_t) * w * h);
+  }
+}
+
+static void app_base_destroy(App *app) {
+  free(app->base_pixels);
+  app->base_pixels = NULL;
+  app->base_w = 0;
+  app->base_h = 0;
+}
+
+static void app_base_capture(const App *app, const Framebuffer *fb) {
+  if (!app->base_pixels)
+    return;
+  memcpy(app->base_pixels, fb->pixels,
+         sizeof(uint32_t) * fb->width * fb->height);
+}
+
+static void app_base_restore(const App *app, Framebuffer *fb) {
+  if (!app->base_pixels)
+    return;
+  memcpy(fb->pixels, app->base_pixels,
+         sizeof(uint32_t) * fb->width * fb->height);
+}
+
+static void draw_shape_preview(const App *app, Framebuffer *fb, int x, int y) {
+  if (app->tool == TOOL_LINE) {
+    fb_draw_line(fb, app->start_x, app->start_y, x, y, app->brush_color);
+    return;
+  }
+
+  if (app->tool == TOOL_RECT) {
+    if (app->fill)
+      fb_fill_rect(fb, app->start_x, app->start_y, x, y, app->brush_color);
+    else
+      fb_draw_rect(fb, app->start_x, app->start_y, x, y, app->brush_color);
+    return;
+  }
+
+  if (app->tool == TOOL_CIRCLE) {
+    int dx = x - app->start_x;
+    int dy = y - app->start_y;
+    int r = isqrt_int(dx * dx + dy * dy);
+    if (app->fill)
+      fb_fill_circle(fb, app->start_x, app->start_y, r, app->brush_color);
+    else
+      fb_draw_circle(fb, app->start_x, app->start_y, r, app->brush_color);
+    return;
+  }
 }
 
 static void save_canvas_bmp(const Framebuffer *fb) {
@@ -60,40 +144,11 @@ static void save_canvas_bmp(const Framebuffer *fb) {
   }
 }
 
-static void undo_action(History *undo, History *redo, Framebuffer *fb) {
-  uint32_t *current =
-      (uint32_t *)malloc(sizeof(uint32_t) * fb->width * fb->height);
-  if (!current)
+static void restore_from_snapshot(uint32_t *snapshot, Framebuffer *fb) {
+  if (!snapshot)
     return;
-
   for (int i = 0; i < fb->width * fb->height; i++)
-    current[i] = fb->pixels[i];
-
-  if (history_pop(undo, fb)) {
-    Framebuffer tmp = *fb;
-    tmp.pixels = current;
-    history_push(redo, &tmp);
-  }
-
-  free(current);
-}
-
-static void redo_action(History *undo, History *redo, Framebuffer *fb) {
-  uint32_t *current =
-      (uint32_t *)malloc(sizeof(uint32_t) * fb->width * fb->height);
-  if (!current)
-    return;
-
-  for (int i = 0; i < fb->width * fb->height; i++)
-    current[i] = fb->pixels[i];
-
-  if (history_pop(redo, fb)) {
-    Framebuffer tmp = *fb;
-    tmp.pixels = current;
-    history_push(undo, &tmp);
-  }
-
-  free(current);
+    fb->pixels[i] = snapshot[i];
 }
 
 int main(int argc, char **argv) {
@@ -169,6 +224,24 @@ int main(int argc, char **argv) {
   app.brush_radius = 6;
   app.brush_color = ARGB(255, 240, 240, 240);
 
+  app.tool = TOOL_BRUSH;
+  app.fill = 0;
+
+  app.start_x = 0;
+  app.start_y = 0;
+
+  app_base_init(&app, width, height);
+  if (!app.base_pixels) {
+    history_destroy(&undo);
+    history_destroy(&redo);
+    fb_destroy(&fb);
+    SDL_DestroyTexture(texture);
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    return 1;
+  }
+
   int running = 1;
   while (running) {
     SDL_Event e;
@@ -201,12 +274,34 @@ int main(int argc, char **argv) {
         if (key == SDLK_s) {
           save_canvas_bmp(&fb);
         }
+        if (key == SDLK_1)
+          app.tool = TOOL_BRUSH;
+        if (key == SDLK_2)
+          app.tool = TOOL_LINE;
+        if (key == SDLK_3)
+          app.tool = TOOL_RECT;
+        if (key == SDLK_4)
+          app.tool = TOOL_CIRCLE;
+
+        if (key == SDLK_f)
+          app.fill = !app.fill;
 
         if ((mod & KMOD_CTRL) && key == SDLK_z) {
-          undo_action(&undo, &redo, &fb);
+          uint32_t *prev = history_peek_copy(&undo);
+          if (prev) {
+            history_push(&redo, &fb);
+            history_pop(&undo, &fb);
+            free(prev);
+          }
         }
+
         if ((mod & KMOD_CTRL) && key == SDLK_y) {
-          redo_action(&undo, &redo, &fb);
+          uint32_t *next = history_peek_copy(&redo);
+          if (next) {
+            history_push(&undo, &fb);
+            history_pop(&redo, &fb);
+            free(next);
+          }
         }
       } break;
 
@@ -216,15 +311,28 @@ int main(int argc, char **argv) {
           history_clear(&redo);
 
           app.drawing = 1;
+          app.start_x = e.button.x;
+          app.start_y = e.button.y;
           app.last_x = e.button.x;
           app.last_y = e.button.y;
-          brush_stamp_circle(&fb, app.last_x, app.last_y, app.brush_radius,
-                             app.brush_color);
+
+          if (app.tool == TOOL_BRUSH) {
+            brush_stamp_circle(&fb, app.last_x, app.last_y, app.brush_radius,
+                               app.brush_color);
+          } else {
+            app_base_capture(&app, &fb);
+            app_base_restore(&app, &fb);
+            draw_shape_preview(&app, &fb, app.last_x, app.last_y);
+          }
         }
         break;
 
       case SDL_MOUSEBUTTONUP:
         if (e.button.button == SDL_BUTTON_LEFT) {
+          if (app.drawing && app.tool != TOOL_BRUSH) {
+            app_base_restore(&app, &fb);
+            draw_shape_preview(&app, &fb, e.button.x, e.button.y);
+          }
           app.drawing = 0;
         }
         break;
@@ -233,8 +341,15 @@ int main(int argc, char **argv) {
         if (app.drawing) {
           int x = e.motion.x;
           int y = e.motion.y;
-          brush_stroke_circle(&fb, app.last_x, app.last_y, x, y,
-                              app.brush_radius, app.brush_color);
+
+          if (app.tool == TOOL_BRUSH) {
+            brush_stroke_circle(&fb, app.last_x, app.last_y, x, y,
+                                app.brush_radius, app.brush_color);
+          } else {
+            app_base_restore(&app, &fb);
+            draw_shape_preview(&app, &fb, x, y);
+          }
+
           app.last_x = x;
           app.last_y = y;
         }
@@ -250,6 +365,7 @@ int main(int argc, char **argv) {
 
   history_destroy(&undo);
   history_destroy(&redo);
+  app_base_destroy(&app);
   fb_destroy(&fb);
   SDL_DestroyTexture(texture);
   SDL_DestroyRenderer(renderer);

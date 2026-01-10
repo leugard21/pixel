@@ -18,3 +18,4 @@ void history_destroy(History *h);
 void history_clear(History *h);
 int history_push(History *h, const Framebuffer *fb);
 int history_pop(History *h, Framebuffer *fb);
+uint32_t *history_peek_copy(const History *h);

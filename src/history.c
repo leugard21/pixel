@@ -1,5 +1,6 @@
 #include "history.h"
 
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -62,4 +63,14 @@ int history_pop(History *h, Framebuffer *fb) {
   h->size--;
 
   return 1;
+}
+
+uint32_t *history_peek_copy(const History *h) {
+  if (!h || h->top < 0)
+    return NULL;
+
+  uint32_t *copy = (uint32_t *)malloc(sizeof(uint32_t) * h->width * h->height);
+
+  memcpy(copy, h->items[h->top], sizeof(uint32_t) * h->width * h->height);
+  return copy;
 }

@@ -3,6 +3,13 @@
 #include <stdlib.h>
 
 static int iabs(int v) { return v < 0 ? -v : v; }
+static void iswap(int *a, int *b) {
+  int t = *a;
+  *a = *b;
+  *b = t;
+}
+static int imin(int a, int b) { return a < b ? a : b; }
+static int imax(int a, int b) { return a > b ? a : b; }
 
 int fb_init(Framebuffer *fb, int w, int h) {
   fb->width = w;
@@ -60,6 +67,90 @@ void fb_draw_line(Framebuffer *fb, int x0, int y0, int x1, int y1,
     if (e2 <= dx) {
       err += dx;
       y0 += sy;
+    }
+  }
+}
+
+void fb_draw_rect(Framebuffer *fb, int x0, int y0, int x1, int y1,
+                  uint32_t color) {
+  int left = imin(x0, x1);
+  int right = imax(x0, x1);
+  int top = imin(y0, y1);
+  int bottom = imax(y0, y1);
+
+  for (int x = left; x <= right; x++) {
+    fb_put_pixel(fb, x, top, color);
+    fb_put_pixel(fb, x, bottom, color);
+  }
+  for (int y = top; y <= bottom; y++) {
+    fb_put_pixel(fb, left, y, color);
+    fb_put_pixel(fb, right, y, color);
+  }
+}
+
+void fb_fill_rect(Framebuffer *fb, int x0, int y0, int x1, int y1,
+                  uint32_t color) {
+  int left = imin(x0, x1);
+  int right = imax(x0, x1);
+  int top = imin(y0, y1);
+  int bottom = imax(y0, y1);
+
+  for (int y = top; y <= bottom; y++) {
+    for (int x = left; x <= right; x++) {
+      fb_put_pixel(fb, x, y, color);
+    }
+  }
+}
+
+static void circle_plot8(Framebuffer *fb, int cx, int cy, int x, int y,
+                         uint32_t color) {
+  fb_put_pixel(fb, cx + x, cy + y, color);
+  fb_put_pixel(fb, cx - x, cy + y, color);
+  fb_put_pixel(fb, cx + x, cy - y, color);
+  fb_put_pixel(fb, cx - x, cy - y, color);
+  fb_put_pixel(fb, cx + y, cy + x, color);
+  fb_put_pixel(fb, cx - y, cy + x, color);
+  fb_put_pixel(fb, cx + y, cy - x, color);
+  fb_put_pixel(fb, cx - y, cy - x, color);
+}
+
+void fb_draw_circle(Framebuffer *fb, int cx, int cy, int radius,
+                    uint32_t color) {
+  if (radius <= 0) {
+    fb_put_pixel(fb, cx, cy, color);
+    return;
+  }
+
+  int x = radius;
+  int y = 0;
+  int err = 1 - x;
+
+  while (x >= y) {
+    circle_plot8(fb, cx, cy, x, y, color);
+    y++;
+    if (err < 0) {
+      err += 2 * y + 1;
+    } else {
+      x--;
+      err += 2 * (y - x) + 1;
+    }
+  }
+}
+
+void fb_fill_circle(Framebuffer *fb, int cx, int cy, int radius,
+                    uint32_t color) {
+  if (radius <= 0) {
+    fb_put_pixel(fb, cx, cy, color);
+    return;
+  }
+
+  int r2 = radius * radius;
+  for (int y = -radius; y <= radius; y++) {
+    int yy = y * y;
+    for (int x = -radius; x <= radius; x++) {
+      if (x * x + yy <= r2) {
+        fb_put_pixel(fb, cx + x, cy + y, color);
+      }
     }
   }
 }

@@ -21,3 +21,12 @@ uint32_t fb_get_pixel(const Framebuffer *fb, int x, int y, uint32_t fallback);
 
 void fb_draw_line(Framebuffer *fb, int x0, int y0, int x1, int y1,
                   uint32_t color);
+void fb_draw_rect(Framebuffer *fb, int x0, int y0, int x1, int y1,
+                  uint32_t color);
+void fb_fill_rect(Framebuffer *fb, int x0, int y0, int x1, int y1,
+                  uint32_t color);
+
+void fb_draw_circle(Framebuffer *fb, int cx, int cy, int radius,
+                    uint32_t color);
+void fb_fill_circle(Framebuffer *fb, int cx, int cy, int radius,
+                    uint32_t color);
