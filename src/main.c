@@ -65,7 +65,12 @@ int main(int argc, char **argv) {
 
     fb_clear(&fb, 0xFF121212);
 
-    fb_put_pixel(&fb, width / 2, height / 2, 0xFF0000);
+    fb_draw_line(&fb, 20, 20, width - 20, 20, ARGB(255, 255, 80, 80));
+    fb_draw_line(&fb, 20, 20, 20, height - 20, ARGB(255, 80, 255, 80));
+    fb_draw_line(&fb, 20, height - 20, width - 20, height - 20,
+                 ARGB(255, 80, 80, 255));
+    fb_draw_line(&fb, 20, 20, width - 20, height - 20,
+                 ARGB(255, 240, 240, 240));
 
     SDL_UpdateTexture(texture, 0, fb.pixels, width * sizeof(uint32_t));
     SDL_RenderClear(renderer);
