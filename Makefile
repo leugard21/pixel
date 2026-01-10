@@ -5,7 +5,7 @@ LDLIBS := $(shell sdl2-config --libs)
 SDL_CFLAGS := $(shell sdl2-config --cflags)
 
 TARGET := build/pixel
-SRCS := src/main.c src/framebuffer.c
+SRCS := src/main.c src/framebuffer.c src/brush.c
 OBJS := $(SRCS:.c=.o)
 
 .PHONY: all clean run

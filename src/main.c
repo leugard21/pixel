@@ -1,11 +1,27 @@
 #include <SDL2/SDL.h>
 #include <stdio.h>
 
+#include "brush.h"
 #include "framebuffer.h"
 
 static int sdl_fail(const char *msg) {
   fprintf(stderr, "%s: %s\n", msg, SDL_GetError());
   return 1;
+}
+
+typedef struct {
+  int drawing;
+  int last_x;
+  int last_y;
+  int brush_radius;
+  uint32_t brush_color;
+} App;
+
+static void clamp_int(int *v, int lo, int hi) {
+  if (*v < lo)
+    *v = lo;
+  if (*v > hi)
+    *v = hi;
 }
 
 int main(int argc, char **argv) {
@@ -53,24 +69,68 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  fb_clear(&fb, ARGB(255, 18, 18, 18));
+
+  App app;
+  app.drawing = 0;
+  app.last_x = 0;
+  app.last_y = 0;
+  app.brush_radius = 6;
+  app.brush_color = ARGB(255, 240, 240, 240);
+
   int running = 1;
   while (running) {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
-      if (e.type == SDL_QUIT)
+      switch (e.type) {
+      case SDL_QUIT:
         running = 0;
-      if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE)
-        running = 0;
+        break;
+
+      case SDL_KEYDOWN:
+        if (e.key.keysym.sym == SDLK_ESCAPE)
+          running = 0;
+        if (e.key.keysym.sym == SDLK_LEFTBRACKET) {
+          app.brush_radius--;
+          clamp_int(&app.brush_radius, 1, 64);
+        }
+        if (e.key.keysym.sym == SDLK_RIGHTBRACKET) {
+          app.brush_radius++;
+          clamp_int(&app.brush_radius, 1, 64);
+        }
+        if (e.key.keysym.sym == SDLK_c) {
+          fb_clear(&fb, ARGB(255, 18, 18, 18));
+        }
+        break;
+
+      case SDL_MOUSEBUTTONDOWN:
+        if (e.button.button == SDL_BUTTON_LEFT) {
+          app.drawing = 1;
+          app.last_x = e.button.x;
+          app.last_y = e.button.y;
+          brush_stamp_circle(&fb, app.last_x, app.last_y, app.brush_radius,
+                             app.brush_color);
+        }
+        break;
+
+      case SDL_MOUSEBUTTONUP:
+        if (e.button.button == SDL_BUTTON_LEFT) {
+          app.drawing = 0;
+        }
+        break;
+
+      case SDL_MOUSEMOTION:
+        if (app.drawing) {
+          int x = e.motion.x;
+          int y = e.motion.y;
+          brush_stroke_circle(&fb, app.last_x, app.last_y, x, y,
+                              app.brush_radius, app.brush_color);
+          app.last_x = x;
+          app.last_y = y;
+        }
+        break;
+      }
     }
-
-    fb_clear(&fb, 0xFF121212);
-
-    fb_draw_line(&fb, 20, 20, width - 20, 20, ARGB(255, 255, 80, 80));
-    fb_draw_line(&fb, 20, 20, 20, height - 20, ARGB(255, 80, 255, 80));
-    fb_draw_line(&fb, 20, height - 20, width - 20, height - 20,
-                 ARGB(255, 80, 80, 255));
-    fb_draw_line(&fb, 20, 20, width - 20, height - 20,
-                 ARGB(255, 240, 240, 240));
 
     SDL_UpdateTexture(texture, 0, fb.pixels, width * sizeof(uint32_t));
     SDL_RenderClear(renderer);
