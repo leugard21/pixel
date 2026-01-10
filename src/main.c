@@ -26,6 +26,12 @@ static int sdl_fail(const char *msg) {
 typedef enum { TOOL_BRUSH = 0, TOOL_LINE, TOOL_RECT, TOOL_CIRCLE } Tool;
 
 typedef struct {
+  float zoom;
+  float offset_x;
+  float offset_y;
+} View;
+
+typedef struct {
   int drawing;
   int start_x;
   int start_y;
@@ -41,7 +47,35 @@ typedef struct {
   uint32_t *base_pixels;
   int base_w;
   int base_h;
+
+  View view;
+  int panning;
+  int pan_last_x;
+  int pan_last_y;
 } App;
+
+static int view_screen_to_canvas(const View *v, int sx, int sy, int *out_x,
+                                 int *out_y) {
+  if (v->zoom <= 0.0001f)
+    return 0;
+
+  float cx = (sx - v->offset_x) / v->zoom;
+  float cy = (sy - v->offset_y) / v->zoom;
+  *out_x = (int)cx;
+  *out_y = (int)cy;
+
+  return 1;
+}
+
+static SDL_Rect view_canvas_to_screen_rect(const View *v, int canvas_w,
+                                           int canvas_h) {
+  SDL_Rect r;
+  r.x = (int)v->offset_x;
+  r.y = (int)v->offset_y;
+  r.w = (int)(canvas_w * v->zoom);
+  r.h = (int)(canvas_h * v->zoom);
+  return r;
+}
 
 static void clamp_int(int *v, int lo, int hi) {
   if (*v < lo)
@@ -187,6 +221,8 @@ int main(int argc, char **argv) {
     return sdl_fail("SDL_CreateTexture failed");
   }
 
+  SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
+
   Framebuffer fb;
   if (!fb_init(&fb, width, height)) {
     SDL_DestroyTexture(texture);
@@ -242,6 +278,13 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  app.view.zoom = 1.0f;
+  app.view.offset_x = 0.0f;
+  app.view.offset_y = 0.0f;
+  app.panning = 0;
+  app.pan_last_x = 0;
+  app.pan_last_y = 0;
+
   int running = 1;
   while (running) {
     SDL_Event e;
@@ -294,7 +337,6 @@ int main(int argc, char **argv) {
             free(prev);
           }
         }
-
         if ((mod & KMOD_CTRL) && key == SDLK_y) {
           uint32_t *next = history_peek_copy(&redo);
           if (next) {
@@ -303,18 +345,39 @@ int main(int argc, char **argv) {
             free(next);
           }
         }
+
+        if (key == SDLK_r) {
+          app.view.zoom = 1.0f;
+          app.view.offset_x = 0.0f;
+          app.view.offset_y = 0.0f;
+        }
+
       } break;
 
       case SDL_MOUSEBUTTONDOWN:
+        if (e.button.button == SDL_BUTTON_MIDDLE ||
+            (e.button.button == SDL_BUTTON_LEFT &&
+             (SDL_GetKeyboardState(NULL)[SDL_SCANCODE_SPACE]))) {
+          app.panning = 1;
+          app.pan_last_x = e.button.x;
+          app.pan_last_y = e.button.y;
+          break;
+        }
+
         if (e.button.button == SDL_BUTTON_LEFT) {
           history_push(&undo, &fb);
           history_clear(&redo);
 
+          int cx, cy;
+          if (!view_screen_to_canvas(&app.view, e.button.x, e.button.y, &cx,
+                                     &cy))
+            break;
+
           app.drawing = 1;
-          app.start_x = e.button.x;
-          app.start_y = e.button.y;
-          app.last_x = e.button.x;
-          app.last_y = e.button.y;
+          app.start_x = cx;
+          app.start_y = cy;
+          app.last_x = cx;
+          app.last_y = cy;
 
           if (app.tool == TOOL_BRUSH) {
             brush_stamp_circle(&fb, app.last_x, app.last_y, app.brush_radius,
@@ -328,6 +391,12 @@ int main(int argc, char **argv) {
         break;
 
       case SDL_MOUSEBUTTONUP:
+        if (e.button.button == SDL_BUTTON_MIDDLE ||
+            (e.button.button == SDL_BUTTON_LEFT && app.panning)) {
+          app.panning = 0;
+          break;
+        }
+
         if (e.button.button == SDL_BUTTON_LEFT) {
           if (app.drawing && app.tool != TOOL_BRUSH) {
             app_base_restore(&app, &fb);
@@ -338,28 +407,67 @@ int main(int argc, char **argv) {
         break;
 
       case SDL_MOUSEMOTION:
+        if (app.panning) {
+          int dx = e.motion.x - app.pan_last_x;
+          int dy = e.motion.y - app.pan_last_y;
+          app.view.offset_x += (float)dx;
+          app.view.offset_y += (float)dy;
+          app.pan_last_x = e.motion.x;
+          app.pan_last_y = e.motion.y;
+          break;
+        }
+
         if (app.drawing) {
-          int x = e.motion.x;
-          int y = e.motion.y;
+          int x, y;
+          if (!view_screen_to_canvas(&app.view, e.motion.x, e.motion.y, &x, &y))
+            break;
 
           if (app.tool == TOOL_BRUSH) {
             brush_stroke_circle(&fb, app.last_x, app.last_y, x, y,
                                 app.brush_radius, app.brush_color);
           } else {
+            int cx, cy;
+
             app_base_restore(&app, &fb);
-            draw_shape_preview(&app, &fb, x, y);
+            if (view_screen_to_canvas(&app.view, e.button.x, e.button.y, &cx,
+                                      &cy)) {
+              draw_shape_preview(&app, &fb, cx, cy);
+            }
           }
 
           app.last_x = x;
           app.last_y = y;
         }
         break;
+
+      case SDL_MOUSEWHEEL: {
+        int mx, my;
+        SDL_GetMouseState(&mx, &my);
+
+        float old = app.view.zoom;
+        float factor = (e.wheel.y > 0) ? 1.1f : 0.9f;
+        float next = old * factor;
+        if (next < 0.25f)
+          next = 0.25f;
+        if (next > 20.0f)
+          next = 20.0f;
+
+        if (next != old) {
+          float cx = (mx - app.view.offset_x) / old;
+          float cy = (my - app.view.offset_y) / old;
+
+          app.view.zoom = next;
+          app.view.offset_x = mx - cx * next;
+          app.view.offset_y = my - cy * next;
+        }
+      } break;
       }
     }
 
     SDL_UpdateTexture(texture, 0, fb.pixels, width * (int)sizeof(uint32_t));
     SDL_RenderClear(renderer);
-    SDL_RenderCopy(renderer, texture, 0, 0);
+    SDL_Rect dst = view_canvas_to_screen_rect(&app.view, fb.width, fb.height);
+    SDL_RenderCopy(renderer, texture, 0, &dst);
     SDL_RenderPresent(renderer);
   }
 
