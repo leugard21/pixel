@@ -14,6 +14,7 @@ static int make_dir(const char *path) { return mkdir(path, 0755); }
 #include "brush.h"
 #include "export.h"
 #include "framebuffer.h"
+#include "history.h"
 
 static int sdl_fail(const char *msg) {
   fprintf(stderr, "%s: %s\n", msg, SDL_GetError());
@@ -59,6 +60,42 @@ static void save_canvas_bmp(const Framebuffer *fb) {
   }
 }
 
+static void undo_action(History *undo, History *redo, Framebuffer *fb) {
+  uint32_t *current =
+      (uint32_t *)malloc(sizeof(uint32_t) * fb->width * fb->height);
+  if (!current)
+    return;
+
+  for (int i = 0; i < fb->width * fb->height; i++)
+    current[i] = fb->pixels[i];
+
+  if (history_pop(undo, fb)) {
+    Framebuffer tmp = *fb;
+    tmp.pixels = current;
+    history_push(redo, &tmp);
+  }
+
+  free(current);
+}
+
+static void redo_action(History *undo, History *redo, Framebuffer *fb) {
+  uint32_t *current =
+      (uint32_t *)malloc(sizeof(uint32_t) * fb->width * fb->height);
+  if (!current)
+    return;
+
+  for (int i = 0; i < fb->width * fb->height; i++)
+    current[i] = fb->pixels[i];
+
+  if (history_pop(redo, fb)) {
+    Framebuffer tmp = *fb;
+    tmp.pixels = current;
+    history_push(undo, &tmp);
+  }
+
+  free(current);
+}
+
 int main(int argc, char **argv) {
   (void)argc;
   (void)argv;
@@ -66,8 +103,8 @@ int main(int argc, char **argv) {
   if (SDL_Init(SDL_INIT_VIDEO) != 0)
     return sdl_fail("SDL_Init failed");
 
-  const int width = 960;
-  const int height = 540;
+  const int width = 800;
+  const int height = 600;
 
   SDL_Window *window =
       SDL_CreateWindow("Pixel", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
@@ -106,6 +143,25 @@ int main(int argc, char **argv) {
 
   fb_clear(&fb, ARGB(255, 18, 18, 18));
 
+  History undo, redo;
+  if (!history_init(&undo, 32, width, height)) {
+    fb_destroy(&fb);
+    SDL_DestroyTexture(texture);
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    return 1;
+  }
+  if (!history_init(&redo, 32, width, height)) {
+    history_destroy(&undo);
+    fb_destroy(&fb);
+    SDL_DestroyTexture(texture);
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    return 1;
+  }
+
   App app;
   app.drawing = 0;
   app.last_x = 0;
@@ -122,27 +178,43 @@ int main(int argc, char **argv) {
         running = 0;
         break;
 
-      case SDL_KEYDOWN:
-        if (e.key.keysym.sym == SDLK_ESCAPE)
+      case SDL_KEYDOWN: {
+        SDL_Keycode key = e.key.keysym.sym;
+        SDL_Keymod mod = e.key.keysym.mod;
+
+        if (key == SDLK_ESCAPE)
           running = 0;
-        if (e.key.keysym.sym == SDLK_LEFTBRACKET) {
+
+        if (key == SDLK_LEFTBRACKET) {
           app.brush_radius--;
           clamp_int(&app.brush_radius, 1, 64);
         }
-        if (e.key.keysym.sym == SDLK_RIGHTBRACKET) {
+        if (key == SDLK_RIGHTBRACKET) {
           app.brush_radius++;
           clamp_int(&app.brush_radius, 1, 64);
         }
-        if (e.key.keysym.sym == SDLK_c) {
+        if (key == SDLK_c) {
           fb_clear(&fb, ARGB(255, 18, 18, 18));
+          history_clear(&undo);
+          history_clear(&redo);
         }
-        if (e.key.keysym.sym == SDLK_s) {
+        if (key == SDLK_s) {
           save_canvas_bmp(&fb);
         }
-        break;
+
+        if ((mod & KMOD_CTRL) && key == SDLK_z) {
+          undo_action(&undo, &redo, &fb);
+        }
+        if ((mod & KMOD_CTRL) && key == SDLK_y) {
+          redo_action(&undo, &redo, &fb);
+        }
+      } break;
 
       case SDL_MOUSEBUTTONDOWN:
         if (e.button.button == SDL_BUTTON_LEFT) {
+          history_push(&undo, &fb);
+          history_clear(&redo);
+
           app.drawing = 1;
           app.last_x = e.button.x;
           app.last_y = e.button.y;
@@ -170,12 +242,14 @@ int main(int argc, char **argv) {
       }
     }
 
-    SDL_UpdateTexture(texture, 0, fb.pixels, width * sizeof(uint32_t));
+    SDL_UpdateTexture(texture, 0, fb.pixels, width * (int)sizeof(uint32_t));
     SDL_RenderClear(renderer);
     SDL_RenderCopy(renderer, texture, 0, 0);
     SDL_RenderPresent(renderer);
   }
 
+  history_destroy(&undo);
+  history_destroy(&redo);
   fb_destroy(&fb);
   SDL_DestroyTexture(texture);
   SDL_DestroyRenderer(renderer);
