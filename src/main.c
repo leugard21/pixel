@@ -78,6 +78,29 @@ static const char *tool_name(Tool t) {
   return "UNKNOWN";
 }
 
+static uint32_t palette_color(int idx) {
+  switch (idx) {
+  case 1:
+    return ARGB(255, 240, 240, 240); // white
+  case 2:
+    return ARGB(255, 20, 20, 20); // black
+  case 3:
+    return ARGB(255, 255, 80, 80); // red
+  case 4:
+    return ARGB(255, 80, 255, 80); // green
+  case 5:
+    return ARGB(255, 80, 80, 255); // blue
+  case 6:
+    return ARGB(255, 255, 255, 80); // yellow
+  case 7:
+    return ARGB(255, 255, 80, 255); // magenta
+  case 8:
+    return ARGB(255, 80, 255, 255); // cyan
+  default:
+    return ARGB(255, 240, 240, 240);
+  }
+}
+
 static int view_screen_to_canvas(const View *v, int sx, int sy, int *out_x,
                                  int *out_y) {
   if (v->zoom <= 0.0001f)
@@ -263,9 +286,11 @@ static void hud_rebuild_if_needed(App *app, SDL_Renderer *r) {
   ui_text_destroy(&app->hud_text);
 
   char line[256];
-  snprintf(line, sizeof(line), "Tool:%s  Brush:%d  Fill:%s  Grid:%s  Zoom:%d%%",
+  snprintf(line, sizeof(line),
+           "Tool:%s  Brush:%d  Fill:%s  Grid:%s  Zoom:%d%%  Color:%08X",
            tool_name(app->tool), app->brush_radius, app->fill ? "ON" : "OFF",
-           app->show_grid ? "ON" : "OFF", (int)(app->view.zoom * 100.0f));
+           app->show_grid ? "ON" : "OFF", (int)(app->view.zoom * 100.0f),
+           (unsigned)app->brush_color);
 
   if (ui_text_make(&app->ui, r, &app->hud_text, line)) {
     app->hud_dirty = 0;
@@ -409,22 +434,19 @@ int main(int argc, char **argv) {
           history_clear(&redo);
         }
 
-        if (key == SDLK_s)
-          save_canvas_bmp(&fb);
-
-        if (key == SDLK_1) {
+        if (key == SDLK_F1) {
           app.tool = TOOL_BRUSH;
           hud_mark_dirty(&app);
         }
-        if (key == SDLK_2) {
+        if (key == SDLK_F2) {
           app.tool = TOOL_LINE;
           hud_mark_dirty(&app);
         }
-        if (key == SDLK_3) {
+        if (key == SDLK_F3) {
           app.tool = TOOL_RECT;
           hud_mark_dirty(&app);
         }
-        if (key == SDLK_4) {
+        if (key == SDLK_F4) {
           app.tool = TOOL_CIRCLE;
           hud_mark_dirty(&app);
         }
@@ -468,6 +490,12 @@ int main(int argc, char **argv) {
             free(next);
           }
         }
+
+        if (key >= SDLK_1 && key <= SDLK_8) {
+          int idx = (int)(key - SDLK_0);
+          app.brush_color = palette_color(idx);
+          hud_mark_dirty(&app);
+        }
       } break;
 
       case SDL_MOUSEBUTTONDOWN:
@@ -482,6 +510,18 @@ int main(int argc, char **argv) {
         }
 
         if (e.button.button == SDL_BUTTON_LEFT) {
+          SDL_Keymod mod = SDL_GetModState();
+          if (mod & KMOD_ALT) {
+            int cx, cy;
+            if (view_screen_to_canvas(&app.view, e.button.x, e.button.y, &cx,
+                                      &cy)) {
+              uint32_t c = fb_get_pixel(&fb, cx, cy, ARGB(255, 0, 0, 0));
+              app.brush_color = c;
+              hud_mark_dirty(&app);
+            }
+            break;
+          }
+
           history_push(&undo, &fb);
           history_clear(&redo);
 
@@ -597,8 +637,23 @@ int main(int argc, char **argv) {
       render_grid(renderer, &app.view, fb.width, fb.height);
 
     if (app.show_hud && app.hud_text.tex) {
-      ui_draw_panel(renderer, 10, 10, app.hud_text.w + 20, app.hud_text.h + 16);
-      ui_draw_text(renderer, &app.hud_text, 20, 18);
+      int panel_w = app.hud_text.w + 20 + 26;
+      ui_draw_panel(renderer, 10, 10, panel_w, app.hud_text.h + 16);
+
+      SDL_Rect sw = {20, 18, 16, 16};
+      uint32_t c = app.brush_color;
+      Uint8 a = (Uint8)((c >> 24) & 0xFF);
+      Uint8 rr = (Uint8)((c >> 16) & 0xFF);
+      Uint8 gg = (Uint8)((c >> 8) & 0xFF);
+      Uint8 bb = (Uint8)(c & 0xFF);
+
+      SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+      SDL_SetRenderDrawColor(renderer, rr, gg, bb, a);
+      SDL_RenderFillRect(renderer, &sw);
+      SDL_SetRenderDrawColor(renderer, 255, 255, 255, 180);
+      SDL_RenderDrawRect(renderer, &sw);
+
+      ui_draw_text(renderer, &app.hud_text, 20 + 22, 18);
     }
 
     SDL_RenderPresent(renderer);
