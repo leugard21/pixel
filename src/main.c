@@ -7,11 +7,15 @@
 
 #ifdef _WIN32
 #include <direct.h>
-static int make_dir(const char *path) { return _mkdir(path); }
+static int make_dir(const char *path) {
+  return _mkdir(path);
+}
 #else
 #include <sys/stat.h>
 #include <sys/types.h>
-static int make_dir(const char *path) { return mkdir(path, 0755); }
+static int make_dir(const char *path) {
+  return mkdir(path, 0755);
+}
 #endif
 
 #include "brush.h"
@@ -19,6 +23,7 @@ static int make_dir(const char *path) { return mkdir(path, 0755); }
 #include "framebuffer.h"
 #include "history.h"
 #include "ui.h"
+#include "ui_components.h"
 
 static int sdl_fail(const char *msg) {
   fprintf(stderr, "%s: %s\n", msg, SDL_GetError());
@@ -58,25 +63,14 @@ typedef struct {
 
   int show_grid;
 
-  int show_hud;
   UI ui;
-  UIText hud_text;
-  int hud_dirty;
-} App;
 
-static const char *tool_name(Tool t) {
-  switch (t) {
-  case TOOL_BRUSH:
-    return "BRUSH";
-  case TOOL_LINE:
-    return "LINE";
-  case TOOL_RECT:
-    return "RECT";
-  case TOOL_CIRCLE:
-    return "CIRCLE";
-  }
-  return "UNKNOWN";
-}
+  UIToolbar toolbar;
+  UIColorPicker color_picker;
+  UIButton save_button;
+  UIButton clear_button;
+  int ui_initialized;
+} App;
 
 static uint32_t palette_color(int idx) {
   switch (idx) {
@@ -107,18 +101,18 @@ static int view_screen_to_canvas(const View *v, int sx, int sy, int *out_x,
     return 0;
   float cx = (sx - v->offset_x) / v->zoom;
   float cy = (sy - v->offset_y) / v->zoom;
-  *out_x = (int)cx;
-  *out_y = (int)cy;
+  *out_x = (int) cx;
+  *out_y = (int) cy;
   return 1;
 }
 
 static SDL_Rect view_canvas_to_screen_rect(const View *v, int canvas_w,
                                            int canvas_h) {
   SDL_Rect r;
-  r.x = (int)v->offset_x;
-  r.y = (int)v->offset_y;
-  r.w = (int)(canvas_w * v->zoom);
-  r.h = (int)(canvas_h * v->zoom);
+  r.x = (int) v->offset_x;
+  r.y = (int) v->offset_y;
+  r.w = (int) (canvas_w * v->zoom);
+  r.h = (int) (canvas_h * v->zoom);
   return r;
 }
 
@@ -161,16 +155,16 @@ static void render_grid(SDL_Renderer *r, const View *v, int canvas_w,
   if (mod_y < 0)
     mod_y += step;
 
-  float first_x = (float)left + (step - mod_x);
-  float first_y = (float)top + (step - mod_y);
+  float first_x = (float) left + (step - mod_x);
+  float first_y = (float) top + (step - mod_y);
 
-  for (float x = first_x; x <= (float)right; x += step) {
-    int xi = (int)(x + 0.5f);
+  for (float x = first_x; x <= (float) right; x += step) {
+    int xi = (int) (x + 0.5f);
     SDL_RenderDrawLine(r, xi, top, xi, bottom);
   }
 
-  for (float y = first_y; y <= (float)bottom; y += step) {
-    int yi = (int)(y + 0.5f);
+  for (float y = first_y; y <= (float) bottom; y += step) {
+    int yi = (int) (y + 0.5f);
     SDL_RenderDrawLine(r, left, yi, right, yi);
   }
 }
@@ -197,7 +191,7 @@ static int isqrt_int(int v) {
 static void app_base_init(App *app, int w, int h) {
   app->base_w = w;
   app->base_h = h;
-  app->base_pixels = (uint32_t *)malloc(sizeof(uint32_t) * w * h);
+  app->base_pixels = (uint32_t *) malloc(sizeof(uint32_t) * w * h);
   if (app->base_pixels)
     memset(app->base_pixels, 0, sizeof(uint32_t) * w * h);
 }
@@ -250,7 +244,7 @@ static void draw_shape_preview(const App *app, Framebuffer *fb, int x, int y) {
 }
 
 void save_canvas_bmp(const Framebuffer *fb) {
-  (void)make_dir("exports");
+  (void) make_dir("exports");
 
   time_t t = time(NULL);
   struct tm tmv;
@@ -273,33 +267,41 @@ void save_canvas_bmp(const Framebuffer *fb) {
   }
 }
 
-static void hud_mark_dirty(App *app) { app->hud_dirty = 1; }
-
-static void hud_rebuild_if_needed(App *app, SDL_Renderer *r) {
-  if (!app->show_hud)
+static void on_tool_selected(void *user_data) {
+  App *app = (App *) user_data;
+  if (!app)
     return;
-  if (!app->ui.font)
+  app->tool = (Tool) app->toolbar.selected_index;
+}
+
+static void on_color_changed(uint32_t color, void *user_data) {
+  App *app = (App *) user_data;
+  if (!app)
     return;
-  if (!app->hud_dirty)
+  app->brush_color = color;
+}
+
+static void on_save_clicked(void *user_data) {
+  App *app = (App *) user_data;
+  if (!app)
     return;
+  Framebuffer fb;
+  fb.width = app->base_w;
+  fb.height = app->base_h;
+  fb.pixels = app->base_pixels;
+  save_canvas_bmp(&fb);
+}
 
-  ui_text_destroy(&app->hud_text);
-
-  char line[256];
-  snprintf(line, sizeof(line),
-           "Tool:%s  Brush:%d  Fill:%s  Grid:%s  Zoom:%d%%  Color:%08X",
-           tool_name(app->tool), app->brush_radius, app->fill ? "ON" : "OFF",
-           app->show_grid ? "ON" : "OFF", (int)(app->view.zoom * 100.0f),
-           (unsigned)app->brush_color);
-
-  if (ui_text_make(&app->ui, r, &app->hud_text, line)) {
-    app->hud_dirty = 0;
-  }
+static void on_clear_clicked(void *user_data) {
+  App *app = (App *) user_data;
+  if (!app)
+    return;
+  printf("Clear button clicked (not implemented in UI callback)\n");
 }
 
 int main(int argc, char **argv) {
-  (void)argc;
-  (void)argv;
+  (void) argc;
+  (void) argv;
 
   if (SDL_Init(SDL_INIT_VIDEO) != 0)
     return sdl_fail("SDL_Init failed");
@@ -379,10 +381,6 @@ int main(int argc, char **argv) {
 
   app.show_grid = 1;
 
-  app.show_hud = 1;
-  app.hud_text.tex = NULL;
-  app.hud_dirty = 1;
-
   app_base_init(&app, width, height);
   if (!app.base_pixels) {
     history_destroy(&undo);
@@ -397,8 +395,33 @@ int main(int argc, char **argv) {
 
   const char *font_path = "assets/font.ttf";
   if (!ui_init(&app.ui, font_path, 14)) {
-    printf("HUD disabled, missing font: %s\n", font_path);
-    app.show_hud = 0;
+    printf("UI disabled, missing font: %s\n", font_path);
+  }
+
+  app.ui_initialized = 0;
+  if (app.ui.font) {
+    ui_toolbar_init(&app.toolbar, 10, 10, 1);
+    ui_toolbar_add_button(&app.toolbar, "BRUSH", on_tool_selected, &app);
+    ui_toolbar_add_button(&app.toolbar, "LINE", on_tool_selected, &app);
+    ui_toolbar_add_button(&app.toolbar, "RECT", on_tool_selected, &app);
+    ui_toolbar_add_button(&app.toolbar, "CIRCLE", on_tool_selected, &app);
+    ui_toolbar_set_selected(&app.toolbar, 0);
+
+    uint32_t colors[] = {ARGB(255, 240, 240, 240), ARGB(255, 20, 20, 20),
+                         ARGB(255, 255, 80, 80),   ARGB(255, 80, 255, 80),
+                         ARGB(255, 80, 80, 255),   ARGB(255, 255, 255, 80),
+                         ARGB(255, 255, 80, 255),  ARGB(255, 80, 255, 255)};
+    ui_color_picker_init(&app.color_picker, 10, height - 40, 24, colors, 8);
+    ui_color_picker_set_callback(&app.color_picker, on_color_changed, &app);
+    ui_color_picker_set_selected(&app.color_picker, 0);
+
+    ui_button_init(&app.save_button, width - 180, height - 40, 80, 30, "SAVE");
+    ui_button_set_callback(&app.save_button, on_save_clicked, &app);
+
+    ui_button_init(&app.clear_button, width - 90, height - 40, 80, 30, "CLEAR");
+    ui_button_set_callback(&app.clear_button, on_clear_clicked, &app);
+
+    app.ui_initialized = 1;
   }
 
   int running = 1;
@@ -420,12 +443,10 @@ int main(int argc, char **argv) {
         if (key == SDLK_LEFTBRACKET) {
           app.brush_radius--;
           clamp_int(&app.brush_radius, 1, 64);
-          hud_mark_dirty(&app);
         }
         if (key == SDLK_RIGHTBRACKET) {
           app.brush_radius++;
           clamp_int(&app.brush_radius, 1, 64);
-          hud_mark_dirty(&app);
         }
 
         if (key == SDLK_c) {
@@ -436,41 +457,29 @@ int main(int argc, char **argv) {
 
         if (key == SDLK_F1) {
           app.tool = TOOL_BRUSH;
-          hud_mark_dirty(&app);
         }
         if (key == SDLK_F2) {
           app.tool = TOOL_LINE;
-          hud_mark_dirty(&app);
         }
         if (key == SDLK_F3) {
           app.tool = TOOL_RECT;
-          hud_mark_dirty(&app);
         }
         if (key == SDLK_F4) {
           app.tool = TOOL_CIRCLE;
-          hud_mark_dirty(&app);
         }
 
         if (key == SDLK_f) {
           app.fill = !app.fill;
-          hud_mark_dirty(&app);
         }
 
         if (key == SDLK_r) {
           app.view.zoom = 1.0f;
           app.view.offset_x = 0.0f;
           app.view.offset_y = 0.0f;
-          hud_mark_dirty(&app);
         }
 
         if (key == SDLK_g) {
           app.show_grid = !app.show_grid;
-          hud_mark_dirty(&app);
-        }
-
-        if (key == SDLK_h) {
-          app.show_hud = !app.show_hud;
-          hud_mark_dirty(&app);
         }
 
         if ((mod & KMOD_CTRL) && key == SDLK_z) {
@@ -496,13 +505,29 @@ int main(int argc, char **argv) {
         }
 
         if (key >= SDLK_1 && key <= SDLK_8) {
-          int idx = (int)(key - SDLK_0);
+          int idx = (int) (key - SDLK_0);
           app.brush_color = palette_color(idx);
-          hud_mark_dirty(&app);
         }
       } break;
 
       case SDL_MOUSEBUTTONDOWN:
+        if (app.ui_initialized && e.button.button == SDL_BUTTON_LEFT) {
+          UIEvent ui_event;
+          ui_event.type = UI_EVENT_MOUSE_DOWN;
+          ui_event.x = e.button.x;
+          ui_event.y = e.button.y;
+          ui_event.button = e.button.button;
+
+          int handled = 0;
+          handled |= ui_toolbar_handle_event(&app.toolbar, &ui_event, &app.ui);
+          handled |= ui_color_picker_handle_event(&app.color_picker, &ui_event);
+          handled |= ui_button_handle_event(&app.save_button, &ui_event);
+          handled |= ui_button_handle_event(&app.clear_button, &ui_event);
+
+          if (handled)
+            break;
+        }
+
         if (e.button.button == SDL_BUTTON_MIDDLE ||
             (e.button.button == SDL_BUTTON_LEFT &&
              (SDL_GetKeyboardState(NULL)[SDL_SCANCODE_SPACE]))) {
@@ -521,7 +546,6 @@ int main(int argc, char **argv) {
                                       &cy)) {
               uint32_t c = fb_get_pixel(&fb, cx, cy, ARGB(255, 0, 0, 0));
               app.brush_color = c;
-              hud_mark_dirty(&app);
             }
             break;
           }
@@ -552,6 +576,23 @@ int main(int argc, char **argv) {
         break;
 
       case SDL_MOUSEBUTTONUP:
+        if (app.ui_initialized && e.button.button == SDL_BUTTON_LEFT) {
+          UIEvent ui_event;
+          ui_event.type = UI_EVENT_MOUSE_UP;
+          ui_event.x = e.button.x;
+          ui_event.y = e.button.y;
+          ui_event.button = e.button.button;
+
+          int handled = 0;
+          handled |= ui_toolbar_handle_event(&app.toolbar, &ui_event, &app.ui);
+          handled |= ui_color_picker_handle_event(&app.color_picker, &ui_event);
+          handled |= ui_button_handle_event(&app.save_button, &ui_event);
+          handled |= ui_button_handle_event(&app.clear_button, &ui_event);
+
+          if (handled)
+            break;
+        }
+
         if (app.panning) {
           if (e.button.button == SDL_BUTTON_MIDDLE ||
               (e.button.button == SDL_BUTTON_LEFT && app.pan_using_left)) {
@@ -575,11 +616,24 @@ int main(int argc, char **argv) {
         break;
 
       case SDL_MOUSEMOTION:
+        if (app.ui_initialized) {
+          UIEvent ui_event;
+          ui_event.type = UI_EVENT_MOUSE_MOVE;
+          ui_event.x = e.motion.x;
+          ui_event.y = e.motion.y;
+          ui_event.button = 0;
+
+          ui_toolbar_handle_event(&app.toolbar, &ui_event, &app.ui);
+          ui_color_picker_handle_event(&app.color_picker, &ui_event);
+          ui_button_handle_event(&app.save_button, &ui_event);
+          ui_button_handle_event(&app.clear_button, &ui_event);
+        }
+
         if (app.panning) {
           int dx = e.motion.x - app.pan_last_x;
           int dy = e.motion.y - app.pan_last_y;
-          app.view.offset_x += (float)dx;
-          app.view.offset_y += (float)dy;
+          app.view.offset_x += (float) dx;
+          app.view.offset_y += (float) dy;
           app.pan_last_x = e.motion.x;
           app.pan_last_y = e.motion.y;
           break;
@@ -622,16 +676,12 @@ int main(int argc, char **argv) {
           app.view.zoom = next;
           app.view.offset_x = mx - cx * next;
           app.view.offset_y = my - cy * next;
-
-          hud_mark_dirty(&app);
         }
       } break;
       }
     }
 
-    hud_rebuild_if_needed(&app, renderer);
-
-    SDL_UpdateTexture(texture, 0, fb.pixels, width * (int)sizeof(uint32_t));
+    SDL_UpdateTexture(texture, 0, fb.pixels, width * (int) sizeof(uint32_t));
     SDL_RenderClear(renderer);
 
     SDL_Rect dst = view_canvas_to_screen_rect(&app.view, fb.width, fb.height);
@@ -640,30 +690,23 @@ int main(int argc, char **argv) {
     if (app.show_grid)
       render_grid(renderer, &app.view, fb.width, fb.height);
 
-    if (app.show_hud && app.hud_text.tex) {
-      int panel_w = app.hud_text.w + 20 + 26;
-      ui_draw_panel(renderer, 10, 10, panel_w, app.hud_text.h + 16);
-
-      SDL_Rect sw = {20, 18, 16, 16};
-      uint32_t c = app.brush_color;
-      Uint8 a = (Uint8)((c >> 24) & 0xFF);
-      Uint8 rr = (Uint8)((c >> 16) & 0xFF);
-      Uint8 gg = (Uint8)((c >> 8) & 0xFF);
-      Uint8 bb = (Uint8)(c & 0xFF);
-
-      SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-      SDL_SetRenderDrawColor(renderer, rr, gg, bb, a);
-      SDL_RenderFillRect(renderer, &sw);
-      SDL_SetRenderDrawColor(renderer, 255, 255, 255, 180);
-      SDL_RenderDrawRect(renderer, &sw);
-
-      ui_draw_text(renderer, &app.hud_text, 20 + 22, 18);
+    if (app.ui_initialized) {
+      ui_toolbar_render(&app.toolbar, renderer, &app.ui);
+      ui_color_picker_render(&app.color_picker, renderer);
+      ui_button_render(&app.save_button, renderer, &app.ui);
+      ui_button_render(&app.clear_button, renderer, &app.ui);
     }
 
     SDL_RenderPresent(renderer);
   }
 
-  ui_text_destroy(&app.hud_text);
+  if (app.ui_initialized) {
+    ui_toolbar_destroy(&app.toolbar);
+    ui_color_picker_destroy(&app.color_picker);
+    ui_button_destroy(&app.save_button);
+    ui_button_destroy(&app.clear_button);
+  }
+
   ui_destroy(&app.ui);
 
   history_destroy(&undo);

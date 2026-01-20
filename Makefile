@@ -5,7 +5,7 @@ SDL_CFLAGS := $(shell sdl2-config --cflags) $(shell pkg-config --cflags SDL2_ttf
 LDLIBS := $(shell sdl2-config --libs) $(shell pkg-config --libs SDL2_ttf) -lm
 
 TARGET := build/pixel
-SRCS := src/main.c src/framebuffer.c src/brush.c src/export.c src/history.c src/ui.c
+SRCS := src/main.c src/framebuffer.c src/brush.c src/export.c src/history.c src/ui.c src/ui_components.c
 OBJS := $(SRCS:.c=.o)
 
 .PHONY: all clean run help install uninstall
