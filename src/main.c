@@ -67,8 +67,10 @@ typedef struct {
 
   UIToolbar toolbar;
   UIColorPicker color_picker;
+  UISlider brush_size_slider;
   UIButton save_button;
   UIButton clear_button;
+  UIStatusBar status_bar;
   int ui_initialized;
 } App;
 
@@ -296,7 +298,45 @@ static void on_clear_clicked(void *user_data) {
   App *app = (App *) user_data;
   if (!app)
     return;
-  printf("Clear button clicked (not implemented in UI callback)\n");
+  Framebuffer fb;
+  fb.width = app->base_w;
+  fb.height = app->base_h;
+  fb.pixels = app->base_pixels;
+  fb_clear(&fb, ARGB(255, 18, 18, 18));
+}
+
+static void on_brush_size_changed(int value, void *user_data) {
+  App *app = (App *) user_data;
+  if (!app)
+    return;
+  app->brush_radius = value;
+}
+
+static const char *get_tool_name(Tool t) {
+  switch (t) {
+  case TOOL_BRUSH:
+    return "BRUSH";
+  case TOOL_LINE:
+    return "LINE";
+  case TOOL_RECT:
+    return "RECT";
+  case TOOL_CIRCLE:
+    return "CIRCLE";
+  }
+  return "UNKNOWN";
+}
+
+static void update_status_bar(App *app) {
+  if (!app || !app->ui_initialized)
+    return;
+
+  char text[256];
+  snprintf(
+      text, sizeof(text), "%s | Size: %d | Fill: %s | Grid: %s | Zoom: %d%%",
+      get_tool_name(app->tool), app->brush_radius, app->fill ? "ON" : "OFF",
+      app->show_grid ? "ON" : "OFF", (int) (app->view.zoom * 100.0f));
+
+  ui_status_bar_set_text(&app->status_bar, text);
 }
 
 int main(int argc, char **argv) {
@@ -415,13 +455,20 @@ int main(int argc, char **argv) {
     ui_color_picker_set_callback(&app.color_picker, on_color_changed, &app);
     ui_color_picker_set_selected(&app.color_picker, 0);
 
+    ui_slider_init(&app.brush_size_slider, 250, height - 60, 150, 40,
+                   "Brush Size", 1, 64, app.brush_radius);
+    ui_slider_set_callback(&app.brush_size_slider, on_brush_size_changed, &app);
+
     ui_button_init(&app.save_button, width - 180, height - 40, 80, 30, "SAVE");
     ui_button_set_callback(&app.save_button, on_save_clicked, &app);
 
     ui_button_init(&app.clear_button, width - 90, height - 40, 80, 30, "CLEAR");
     ui_button_set_callback(&app.clear_button, on_clear_clicked, &app);
 
+    ui_status_bar_init(&app.status_bar, 0, height - 20, width, 20);
+
     app.ui_initialized = 1;
+    update_status_bar(&app);
   }
 
   int running = 1;
@@ -521,11 +568,14 @@ int main(int argc, char **argv) {
           int handled = 0;
           handled |= ui_toolbar_handle_event(&app.toolbar, &ui_event, &app.ui);
           handled |= ui_color_picker_handle_event(&app.color_picker, &ui_event);
+          handled |= ui_slider_handle_event(&app.brush_size_slider, &ui_event);
           handled |= ui_button_handle_event(&app.save_button, &ui_event);
           handled |= ui_button_handle_event(&app.clear_button, &ui_event);
 
-          if (handled)
+          if (handled) {
+            update_status_bar(&app);
             break;
+          }
         }
 
         if (e.button.button == SDL_BUTTON_MIDDLE ||
@@ -586,6 +636,7 @@ int main(int argc, char **argv) {
           int handled = 0;
           handled |= ui_toolbar_handle_event(&app.toolbar, &ui_event, &app.ui);
           handled |= ui_color_picker_handle_event(&app.color_picker, &ui_event);
+          handled |= ui_slider_handle_event(&app.brush_size_slider, &ui_event);
           handled |= ui_button_handle_event(&app.save_button, &ui_event);
           handled |= ui_button_handle_event(&app.clear_button, &ui_event);
 
@@ -624,6 +675,7 @@ int main(int argc, char **argv) {
           ui_event.button = 0;
 
           ui_toolbar_handle_event(&app.toolbar, &ui_event, &app.ui);
+          ui_slider_handle_event(&app.brush_size_slider, &ui_event);
           ui_color_picker_handle_event(&app.color_picker, &ui_event);
           ui_button_handle_event(&app.save_button, &ui_event);
           ui_button_handle_event(&app.clear_button, &ui_event);
@@ -693,8 +745,10 @@ int main(int argc, char **argv) {
     if (app.ui_initialized) {
       ui_toolbar_render(&app.toolbar, renderer, &app.ui);
       ui_color_picker_render(&app.color_picker, renderer);
+      ui_slider_render(&app.brush_size_slider, renderer, &app.ui);
       ui_button_render(&app.save_button, renderer, &app.ui);
       ui_button_render(&app.clear_button, renderer, &app.ui);
+      ui_status_bar_render(&app.status_bar, renderer, &app.ui);
     }
 
     SDL_RenderPresent(renderer);
@@ -703,8 +757,10 @@ int main(int argc, char **argv) {
   if (app.ui_initialized) {
     ui_toolbar_destroy(&app.toolbar);
     ui_color_picker_destroy(&app.color_picker);
+    ui_slider_destroy(&app.brush_size_slider);
     ui_button_destroy(&app.save_button);
     ui_button_destroy(&app.clear_button);
+    ui_status_bar_destroy(&app.status_bar);
   }
 
   ui_destroy(&app.ui);

@@ -85,3 +85,39 @@ int ui_toolbar_add_button(UIToolbar *toolbar, const char *label,
 void ui_toolbar_set_selected(UIToolbar *toolbar, int index);
 int ui_toolbar_handle_event(UIToolbar *toolbar, const UIEvent *event, UI *ui);
 void ui_toolbar_render(const UIToolbar *toolbar, SDL_Renderer *r, UI *ui);
+
+typedef struct {
+  UIRect bounds;
+  int min_value;
+  int max_value;
+  int current_value;
+  int dragging;
+  char *label;
+  UIText *label_text;
+  void (*on_value_change)(int value, void *user_data);
+  void *user_data;
+} UISlider;
+
+int ui_slider_init(UISlider *slider, int x, int y, int w, int h,
+                   const char *label, int min_val, int max_val,
+                   int initial_val);
+void ui_slider_destroy(UISlider *slider);
+void ui_slider_set_callback(UISlider *slider,
+                            void (*on_value_change)(int, void *),
+                            void *user_data);
+void ui_slider_set_value(UISlider *slider, int value);
+int ui_slider_get_value(const UISlider *slider);
+int ui_slider_handle_event(UISlider *slider, const UIEvent *event);
+void ui_slider_render(const UISlider *slider, SDL_Renderer *r, UI *ui);
+
+typedef struct {
+  UIRect bounds;
+  char text[256];
+  UIText *rendered_text;
+  int dirty;
+} UIStatusBar;
+
+int ui_status_bar_init(UIStatusBar *bar, int x, int y, int w, int h);
+void ui_status_bar_destroy(UIStatusBar *bar);
+void ui_status_bar_set_text(UIStatusBar *bar, const char *text);
+void ui_status_bar_render(const UIStatusBar *bar, SDL_Renderer *r, UI *ui);

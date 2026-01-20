@@ -370,3 +370,278 @@ void ui_toolbar_render(const UIToolbar *toolbar, SDL_Renderer *r, UI *ui) {
     }
   }
 }
+
+static int clamp_int(int v, int lo, int hi) {
+  if (v < lo)
+    return lo;
+  if (v > hi)
+    return hi;
+  return v;
+}
+
+int ui_slider_init(UISlider *slider, int x, int y, int w, int h,
+                   const char *label, int min_val, int max_val,
+                   int initial_val) {
+  if (!slider)
+    return 0;
+
+  slider->bounds.x = x;
+  slider->bounds.y = y;
+  slider->bounds.w = w;
+  slider->bounds.h = h;
+
+  slider->min_value = min_val;
+  slider->max_value = max_val;
+  slider->current_value = clamp_int(initial_val, min_val, max_val);
+  slider->dragging = 0;
+
+  slider->label = NULL;
+  if (label) {
+    slider->label = strdup(label);
+    if (!slider->label)
+      return 0;
+  }
+
+  slider->label_text = NULL;
+  slider->on_value_change = NULL;
+  slider->user_data = NULL;
+
+  return 1;
+}
+
+void ui_slider_destroy(UISlider *slider) {
+  if (!slider)
+    return;
+
+  free(slider->label);
+  slider->label = NULL;
+
+  if (slider->label_text) {
+    ui_text_destroy(slider->label_text);
+    free(slider->label_text);
+    slider->label_text = NULL;
+  }
+}
+
+void ui_slider_set_callback(UISlider *slider,
+                             void (*on_value_change)(int, void *),
+                             void *user_data) {
+  if (!slider)
+    return;
+  slider->on_value_change = on_value_change;
+  slider->user_data = user_data;
+}
+
+void ui_slider_set_value(UISlider *slider, int value) {
+  if (!slider)
+    return;
+  slider->current_value = clamp_int(value, slider->min_value, slider->max_value);
+}
+
+int ui_slider_get_value(const UISlider *slider) {
+  if (!slider)
+    return 0;
+  return slider->current_value;
+}
+
+int ui_slider_handle_event(UISlider *slider, const UIEvent *event) {
+  if (!slider || !event)
+    return 0;
+
+  int track_x = slider->bounds.x;
+  int track_w = slider->bounds.w;
+  int track_y = slider->bounds.y + slider->bounds.h / 2 - 2;
+  int track_h = 4;
+
+  UIRect track_rect = {track_x, track_y, track_w, track_h};
+  int inside_track = ui_rect_contains(&track_rect, event->x, event->y);
+
+  float ratio = (float)(slider->current_value - slider->min_value) /
+                (float)(slider->max_value - slider->min_value);
+  int handle_x = track_x + (int)(ratio * track_w) - 6;
+  int handle_y = slider->bounds.y + slider->bounds.h / 2 - 8;
+  UIRect handle_rect = {handle_x, handle_y, 12, 16};
+  int inside_handle = ui_rect_contains(&handle_rect, event->x, event->y);
+
+  switch (event->type) {
+  case UI_EVENT_MOUSE_DOWN:
+    if (inside_handle || inside_track) {
+      slider->dragging = 1;
+      int new_value = slider->min_value +
+                      (int)(((float)(event->x - track_x) / (float)track_w) *
+                            (slider->max_value - slider->min_value));
+      new_value = clamp_int(new_value, slider->min_value, slider->max_value);
+      if (new_value != slider->current_value) {
+        slider->current_value = new_value;
+        if (slider->on_value_change)
+          slider->on_value_change(slider->current_value, slider->user_data);
+      }
+      return 1;
+    }
+    break;
+
+  case UI_EVENT_MOUSE_UP:
+    if (slider->dragging) {
+      slider->dragging = 0;
+      return 1;
+    }
+    break;
+
+  case UI_EVENT_MOUSE_MOVE:
+    if (slider->dragging) {
+      int new_value = slider->min_value +
+                      (int)(((float)(event->x - track_x) / (float)track_w) *
+                            (slider->max_value - slider->min_value));
+      new_value = clamp_int(new_value, slider->min_value, slider->max_value);
+      if (new_value != slider->current_value) {
+        slider->current_value = new_value;
+        if (slider->on_value_change)
+          slider->on_value_change(slider->current_value, slider->user_data);
+      }
+      return 1;
+    }
+    break;
+
+  default:
+    break;
+  }
+
+  return 0;
+}
+
+void ui_slider_render(const UISlider *slider, SDL_Renderer *r, UI *ui) {
+  if (!slider || !r)
+    return;
+
+  SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+
+  int track_x = slider->bounds.x;
+  int track_y = slider->bounds.y + slider->bounds.h / 2 - 2;
+  int track_w = slider->bounds.w;
+  int track_h = 4;
+
+  SDL_Rect track = {track_x, track_y, track_w, track_h};
+  SDL_SetRenderDrawColor(r, 60, 60, 60, 180);
+  SDL_RenderFillRect(r, &track);
+  SDL_SetRenderDrawColor(r, 100, 100, 100, 200);
+  SDL_RenderDrawRect(r, &track);
+
+  float ratio = (float)(slider->current_value - slider->min_value) /
+                (float)(slider->max_value - slider->min_value);
+  int handle_x = track_x + (int)(ratio * track_w) - 6;
+  int handle_y = slider->bounds.y + slider->bounds.h / 2 - 8;
+
+  SDL_Rect handle = {handle_x, handle_y, 12, 16};
+  if (slider->dragging) {
+    SDL_SetRenderDrawColor(r, 100, 160, 220, 255);
+  } else {
+    SDL_SetRenderDrawColor(r, 180, 180, 180, 220);
+  }
+  SDL_RenderFillRect(r, &handle);
+  SDL_SetRenderDrawColor(r, 255, 255, 255, 255);
+  SDL_RenderDrawRect(r, &handle);
+
+  if (slider->label && ui && ui->font) {
+    if (!slider->label_text) {
+      UISlider *mutable_slider = (UISlider *)slider;
+      mutable_slider->label_text = (UIText *)malloc(sizeof(UIText));
+      if (mutable_slider->label_text) {
+        char label_with_value[128];
+        snprintf(label_with_value, sizeof(label_with_value), "%s: %d",
+                 slider->label, slider->current_value);
+        if (!ui_text_make(ui, r, mutable_slider->label_text,
+                          label_with_value)) {
+          free(mutable_slider->label_text);
+          mutable_slider->label_text = NULL;
+        }
+      }
+    } else {
+      ui_text_destroy(slider->label_text);
+      char label_with_value[128];
+      snprintf(label_with_value, sizeof(label_with_value), "%s: %d",
+               slider->label, slider->current_value);
+      ui_text_make(ui, r, slider->label_text, label_with_value);
+    }
+
+    if (slider->label_text && slider->label_text->tex) {
+      int text_x = slider->bounds.x;
+      int text_y = slider->bounds.y - slider->label_text->h - 4;
+      ui_draw_text(r, slider->label_text, text_x, text_y);
+    }
+  }
+}
+
+int ui_status_bar_init(UIStatusBar *bar, int x, int y, int w, int h) {
+  if (!bar)
+    return 0;
+
+  bar->bounds.x = x;
+  bar->bounds.y = y;
+  bar->bounds.w = w;
+  bar->bounds.h = h;
+  bar->text[0] = '\0';
+  bar->rendered_text = NULL;
+  bar->dirty = 1;
+
+  return 1;
+}
+
+void ui_status_bar_destroy(UIStatusBar *bar) {
+  if (!bar)
+    return;
+
+  if (bar->rendered_text) {
+    ui_text_destroy(bar->rendered_text);
+    free(bar->rendered_text);
+    bar->rendered_text = NULL;
+  }
+}
+
+void ui_status_bar_set_text(UIStatusBar *bar, const char *text) {
+  if (!bar || !text)
+    return;
+
+  strncpy(bar->text, text, sizeof(bar->text) - 1);
+  bar->text[sizeof(bar->text) - 1] = '\0';
+  bar->dirty = 1;
+}
+
+void ui_status_bar_render(const UIStatusBar *bar, SDL_Renderer *r, UI *ui) {
+  if (!bar || !r)
+    return;
+
+  SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+
+  SDL_Rect bg = {bar->bounds.x, bar->bounds.y, bar->bounds.w, bar->bounds.h};
+  SDL_SetRenderDrawColor(r, 30, 30, 30, 200);
+  SDL_RenderFillRect(r, &bg);
+  SDL_SetRenderDrawColor(r, 100, 100, 100, 200);
+  SDL_RenderDrawRect(r, &bg);
+
+  if (bar->dirty && ui && ui->font) {
+    UIStatusBar *mutable_bar = (UIStatusBar *)bar;
+    if (mutable_bar->rendered_text) {
+      ui_text_destroy(mutable_bar->rendered_text);
+      free(mutable_bar->rendered_text);
+      mutable_bar->rendered_text = NULL;
+    }
+
+    if (bar->text[0] != '\0') {
+      mutable_bar->rendered_text = (UIText *)malloc(sizeof(UIText));
+      if (mutable_bar->rendered_text) {
+        if (ui_text_make(ui, r, mutable_bar->rendered_text, bar->text)) {
+          mutable_bar->dirty = 0;
+        } else {
+          free(mutable_bar->rendered_text);
+          mutable_bar->rendered_text = NULL;
+        }
+      }
+    }
+  }
+
+  if (bar->rendered_text && bar->rendered_text->tex) {
+    int text_x = bar->bounds.x + 8;
+    int text_y = bar->bounds.y + (bar->bounds.h - bar->rendered_text->h) / 2;
+    ui_draw_text(r, bar->rendered_text, text_x, text_y);
+  }
+}
