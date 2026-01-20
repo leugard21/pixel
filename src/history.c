@@ -19,9 +19,11 @@ int history_init(History *h, int capacity, int width, int height) {
 }
 
 void history_destroy(History *h) {
+  if (!h)
+    return;
   history_clear(h);
   free(h->items);
-  h->items = 0;
+  h->items = NULL;
 }
 
 void history_clear(History *h) {

@@ -249,7 +249,7 @@ static void draw_shape_preview(const App *app, Framebuffer *fb, int x, int y) {
   }
 }
 
-static void save_canvas_bmp(const Framebuffer *fb) {
+void save_canvas_bmp(const Framebuffer *fb) {
   (void)make_dir("exports");
 
   time_t t = time(NULL);
@@ -489,6 +489,10 @@ int main(int argc, char **argv) {
             history_pop(&redo, &fb);
             free(next);
           }
+        }
+
+        if ((mod & KMOD_CTRL) && key == SDLK_s) {
+          save_canvas_bmp(&fb);
         }
 
         if (key >= SDLK_1 && key <= SDLK_8) {

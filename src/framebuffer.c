@@ -3,11 +3,6 @@
 #include <stdlib.h>
 
 static int iabs(int v) { return v < 0 ? -v : v; }
-static void iswap(int *a, int *b) {
-  int t = *a;
-  *a = *b;
-  *b = t;
-}
 static int imin(int a, int b) { return a < b ? a : b; }
 static int imax(int a, int b) { return a > b ? a : b; }
 
@@ -22,8 +17,12 @@ int fb_init(Framebuffer *fb, int w, int h) {
 }
 
 void fb_destroy(Framebuffer *fb) {
+  if (!fb)
+    return;
   free(fb->pixels);
-  fb->pixels = 0;
+  fb->pixels = NULL;
+  fb->width = 0;
+  fb->height = 0;
 }
 
 void fb_clear(Framebuffer *fb, uint32_t color) {
